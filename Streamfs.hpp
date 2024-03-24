@@ -77,6 +77,5 @@ namespace streamfs
             }
             if ( m_file ) return 1;
         }
-
     };
 }
