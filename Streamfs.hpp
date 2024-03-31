@@ -39,18 +39,19 @@ namespace streamfs
     {
         enum struct State{error, ok, process, none,
                           encrypt_failed, compress_failed,
-                          decrypt_failed, decompress_failed};
+                          decrypt_failed, decompress_failed,
+                          cannot_open_file};
         typedef std::int8_t m_return_code_type;
         typedef std::int64_t m_size_type;
         typedef std::FILE* m_file_type;
         typedef void(* m_callback_type )(char *, char *);
         typedef char m_buffer_type [];
-        typedef char m_info_buffer_type [10];
+        typedef char *m_buffer_pointer;
+        typedef char m_info_buffer_type [32];
 
         /* 1 byte Style
-         * 8 bytes check code
-         *
-         *
+         * 4 bytes check code
+         * 27 for future using
          */
 
         m_file_type m_file = nullptr;
@@ -62,14 +63,14 @@ namespace streamfs
         std::string_view m_extension;
 
     public:
-        explicit File(const std::string& a_name,
-                      Style a_style = classic,
+        explicit File(const std::string& a_name, Style a_style = classic,
                       std::string_view a_extension = ".streamfs")
         :m_style {a_style}
         ,m_extension{a_extension}
         {
             if(p_open(a_name+m_extension.data()) != 0){
                 m_mode = Mode::error;
+                m_state = State::cannot_open_file;
                 return;
             }
         }
@@ -80,14 +81,50 @@ namespace streamfs
 
         void setCompress(m_callback_type callback) { m_compress = callback; }
 
-        m_size_type write() //returns bytes writen
+        m_return_code_type run() //call when encryption or/and compression callback/s setted
+        {
+            //check code try decrypt
+        }
+
+        template<std::enable_if_t<t_Mode == Mode::free_stream || t_Mode == Mode::write, bool> = true>
+        m_size_type write(m_size_type a_size, m_buffer_pointer a_p) //returns how many bytes has writen
         {
 
+        }
+
+        template<std::enable_if_t<t_Mode == Mode::free_stream || t_Mode == Mode::read, bool> = true>
+        m_size_type read(m_size_type a_size, m_buffer_pointer a_p) //returns how many bytes has read
+        {
+
+        }
+
+        template<typename Container>
+        Container& operator<<(Container&& a_container)
+        {
+            auto begin_it = std::begin(a_container), end_it = std::end(a_container);
+            for(;begin_it != end_it; ++begin_it){
+
+            }
+            return std::forward<Container>(a_container);
+        }
+
+        template<typename Container>
+        Container& operator>>(Container&& a_container)
+        {
+            auto begin_it = std::begin(a_container), end_it = std::end(a_container);
+            for(;begin_it != end_it; ++begin_it){
+
+            }
+            return std::forward<Container>(a_container);
         }
 
         std::string getErrors()
         {
             std::string error_message{"\n"};
+
+            if(m_state == State::cannot_open_file)
+                error_message += "Cannot open file!\n";
+
             if(m_style == encrypted
             || m_style == compressed_encrypted
             || m_style == table_encrypted
@@ -116,13 +153,14 @@ namespace streamfs
         }
 
     private:
-        static m_return_code_type p_check(m_file_type a_file)
+
+        /*static m_return_code_type p_check(m_file_type a_file)
         {
             m_info_buffer_type temp;
             std::fread(&temp, sizeof(temp), sizeof(*temp), a_file);
             if(*temp){return 0;}
             else{return 1;}
-        }
+        }*/
 
         m_return_code_type p_open(const std::string& a_name)
         {
@@ -140,7 +178,7 @@ namespace streamfs
                 case Mode::read :
                     if ( is_exist ) {
                         m_file = std::fopen(a_name.c_str(), "rb+");
-                        if(p_check(m_file)) { m_mode = Mode::error; }
+                        //if(p_check(m_file)) { m_mode = Mode::error; }
                     } else { m_mode = Mode::error; }
                     break;
                 case Mode::free_stream :
