@@ -2,13 +2,16 @@
 // Created by vuniverse on 3/16/24.
 //
 
-#pragma once
+#ifndef STREAMFS_HEADER
+#define STREAMFS_HEADER
 
 #include <cstdint>
 #include <string_view>
 #include <filesystem>
 #include <cstdio>
 #include <cassert>
+#include <cstring>
+
 
 /* Use document
  * construct main styles are classic and table, also can be added
@@ -20,8 +23,15 @@
  * classic style is using by default
  */
 
+namespace sfs_prvt
+{
+#include "HasMethod.hpp"
+    SeekMethod(data);
+}
+
 namespace streamfs
 {
+    constexpr char no_extension[] = ".";
     enum struct Mode{ error, write, read, free_stream };
     enum Style{
         classic, table, encrypted, table_encrypted, compressed,
@@ -44,21 +54,25 @@ namespace streamfs
         typedef std::int8_t m_return_code_type;
         typedef std::int64_t m_size_type;
         typedef std::FILE* m_file_type;
-        typedef void(* m_callback_type )(char *, char *);
-        typedef char m_buffer_type [];
-        typedef char *m_buffer_pointer;
-        typedef char m_info_buffer_type [32];
+        typedef char m_data_type;
+        typedef m_data_type m_buffer_type [];
+        typedef m_data_type *m_buffer_pointer;
+        typedef m_data_type const *m_const_buffer_pointer;
+        typedef m_data_type m_info_buffer_type [32];
+        typedef std::unique_ptr<m_data_type[]>(* m_callback_type )(m_size_type, m_const_buffer_pointer);
+
 
         /* 1 byte Style
-         * 4 bytes check code
-         * 27 for future using
+         * 8 bytes check code
+         * 23 for future using
          */
 
         m_file_type m_file = nullptr;
         m_callback_type m_encrypt = nullptr;
         m_callback_type m_compress = nullptr;
+        m_info_buffer_type m_info {"0vuniverse"};
         Mode m_mode = t_Mode;
-        Style m_style;
+        Style m_style{};
         State m_state = State::error;
         std::string_view m_extension;
 
@@ -69,6 +83,20 @@ namespace streamfs
         ,m_extension{a_extension}
         {
             if(p_open(a_name+m_extension.data()) != 0){
+                m_mode = Mode::error;
+                m_state = State::cannot_open_file;
+                return;
+            }
+        }
+
+        template<std::enable_if_t<t_Mode == Mode::free_stream || t_Mode == Mode::read, bool> = true>
+        explicit File(const std::string& a_name, std::string_view a_extension = no_extension)
+        :m_extension{a_extension}
+        {
+            bool is_extension = strcmp(m_extension.data(), no_extension) != 0;
+            assert(strcmp(".", no_extension) == 0);
+            assert(strcmp(".streamfs", no_extension) != 0);
+            if(p_open(is_extension ? a_name + m_extension.data() : a_name) != 0){
                 m_mode = Mode::error;
                 m_state = State::cannot_open_file;
                 return;
@@ -89,16 +117,99 @@ namespace streamfs
         template<std::enable_if_t<t_Mode == Mode::free_stream || t_Mode == Mode::write, bool> = true>
         m_size_type write(m_size_type a_size, m_buffer_pointer a_p) //returns how many bytes has writen
         {
-
+            if(!m_file || !a_p || a_size == 0)
+                return 0;
+            auto buffer = std::make_unique<std::remove_reference_t<decltype(*a_p)>[]>(a_size);
+            fwrite(a_p, a_size, 1, m_file);
         }
 
         template<std::enable_if_t<t_Mode == Mode::free_stream || t_Mode == Mode::read, bool> = true>
-        m_size_type read(m_size_type a_size, m_buffer_pointer a_p) //returns how many bytes has read
+        m_size_type get_read_size(m_buffer_pointer a_p)
         {
 
         }
 
-        template<typename Container>
+        template<std::enable_if_t<t_Mode == Mode::free_stream || t_Mode == Mode::read, bool> = true>
+        m_size_type read(m_buffer_pointer a_p) //returns how many bytes has read
+        {
+            switch (m_style) {
+                classic:
+                    break;
+                table:
+                    break;
+                encrypted:
+                    break;
+                table_encrypted:
+                    break;
+                compressed:
+                    break;
+                table_compressed:
+                    break;
+                compressed_encrypted:
+                    break;
+                table_compressed_encrypted:
+                    break;
+            }
+
+            //if(!m_file || !a_p || a_size == 0)
+                return 0;
+            //fread(a_p, a_size, 1, m_file);
+        }
+
+        template<std::enable_if_t<t_Mode == Mode::free_stream || t_Mode == Mode::read, bool> = true>
+        std::unique_ptr<m_data_type*> get_read_size(m_buffer_pointer a_p)
+        {
+
+        }
+
+        template<std::enable_if_t<t_Mode == Mode::free_stream || t_Mode == Mode::read, bool> = true>
+        m_size_type plain_read(m_size_type a_size, m_buffer_pointer a_p) //returns how many bytes has read
+        {
+            switch (m_style) {
+                classic:
+                    break;
+                table:
+                    break;
+                encrypted:
+                    break;
+                table_encrypted:
+                    break;
+                compressed:
+                    break;
+                table_compressed:
+                    break;
+                compressed_encrypted:
+                    break;
+                table_compressed_encrypted:
+                    break;
+            }
+
+            if(!m_file || !a_p || a_size == 0)
+                return 0;
+            fread(a_p, a_size, 1, m_file);
+        }
+
+        template<typename Container,  std::enable_if_t<!sfs_prvt::Has_dataMethod<Container>::value, bool> = true>
+        Container& operator<<(Container&& a_container) //have no data method
+        {
+            auto begin_it = std::begin(a_container), end_it = std::end(a_container);
+            for(;begin_it != end_it; ++begin_it){
+
+            }
+            return std::forward<Container>(a_container);
+        }
+
+        template<typename Container,  std::enable_if_t<!sfs_prvt::Has_dataMethod<Container>::value, bool> = true>
+        Container& operator>>(Container&& a_container) //have no data method
+        {
+            auto begin_it = std::begin(a_container), end_it = std::end(a_container);
+            for(;begin_it != end_it; ++begin_it){
+
+            }
+            return std::forward<Container>(a_container);
+        }
+
+        template<typename Container, std::enable_if_t<sfs_prvt::Has_dataMethod<Container>::value, bool> = true>
         Container& operator<<(Container&& a_container)
         {
             auto begin_it = std::begin(a_container), end_it = std::end(a_container);
@@ -108,7 +219,7 @@ namespace streamfs
             return std::forward<Container>(a_container);
         }
 
-        template<typename Container>
+        template<typename Container, std::enable_if_t<sfs_prvt::Has_dataMethod<Container>::value, bool> = true>
         Container& operator>>(Container&& a_container)
         {
             auto begin_it = std::begin(a_container), end_it = std::end(a_container);
@@ -120,6 +231,9 @@ namespace streamfs
 
         std::string getErrors()
         {
+            if(m_mode != Mode::error)
+                return "No errors occurred";
+
             std::string error_message{"\n"};
 
             if(m_state == State::cannot_open_file)
@@ -161,28 +275,48 @@ namespace streamfs
             if(*temp){return 0;}
             else{return 1;}
         }*/
+        m_return_code_type m_check() //check modes and structures
+        {
+            switch (m_style) {
 
+            }
+                m_info;
+            return 0;
+        }
+
+        //template<bool OnlyExist = false>
         m_return_code_type p_open(const std::string& a_name)
         {
 
-            bool is_exist = [&]{
-                m_file_type file = fopen(a_name.c_str(), "r");
+            auto is_exist = [&]() -> bool {
+                m_file_type file = fopen(a_name.c_str(), "rb");
                 bool exist = ( file != nullptr );
-                fclose(file);
+                if(exist) fclose(file);
                 return exist;
-            }();
+            };
+            //if(OnlyExist && !is_exist())
+              //  return 2;
             switch (m_mode) {
                 case Mode::write :
                     m_file = std::fopen(a_name.c_str(), "wb+");
+                    write(std::size(m_info) * sizeof(*m_info), m_info);
                     break;
                 case Mode::read :
-                    if ( is_exist ) {
+                    if(is_exist()){
                         m_file = std::fopen(a_name.c_str(), "rb+");
+                        read(std::size(m_info) * sizeof(*m_info), m_info);
+                        m_check();
                         //if(p_check(m_file)) { m_mode = Mode::error; }
-                    } else { m_mode = Mode::error; }
+                    }else{ m_mode = Mode::error; }
                     break;
                 case Mode::free_stream :
-                    m_file = std::fopen(a_name.c_str(), "ab+");
+                    m_file = std::fopen(a_name.c_str(), "rb+");
+                    if(is_exist()){
+                        read(std::size(m_info) * sizeof(*m_info), m_info);
+                        m_check();
+                    }else{
+                        write(std::size(m_info) * sizeof(*m_info), m_info);
+                    }
                     break;
                 default:
                     break;
@@ -192,3 +326,5 @@ namespace streamfs
         }
     };
 }
+
+#endif //STREAMFS_HEADER
