@@ -50,7 +50,7 @@ namespace streamfs
         enum struct State{error, ok, process, none,
                           encrypt_failed, compress_failed,
                           decrypt_failed, decompress_failed,
-                          cannot_open_file};
+                          cannot_open_file, freestream_without_style};
         typedef std::int8_t m_return_code_type;
         typedef std::int64_t m_size_type;
         typedef std::FILE* m_file_type;
@@ -71,37 +71,19 @@ namespace streamfs
         m_callback_type m_encrypt = nullptr;
         m_callback_type m_compress = nullptr;
         m_info_buffer_type m_info {"0vuniverse"};
-        Mode m_mode = t_Mode;
-        Style m_style{};
-        State m_state = State::error;
-        std::string_view m_extension;
+        Style m_style{error};
+        std::vector<State> m_state{State::ok};
 
     public:
-        explicit File(const std::string& a_name, Style a_style = classic,
-                      std::string_view a_extension = ".streamfs")
+        explicit File(const std::string& a_name, Style a_style = classic)
         :m_style {a_style}
-        ,m_extension{a_extension}
         {
-            if(p_open(a_name+m_extension.data()) != 0){
-                m_mode = Mode::error;
-                m_state = State::cannot_open_file;
-                return;
-            }
+            if(m_open(a_name) != 0)
+                m_state[0] = State::error;
         }
 
         template<std::enable_if_t<t_Mode == Mode::free_stream || t_Mode == Mode::read, bool> = true>
-        explicit File(const std::string& a_name, std::string_view a_extension = no_extension)
-        :m_extension{a_extension}
-        {
-            bool is_extension = strcmp(m_extension.data(), no_extension) != 0;
-            assert(strcmp(".", no_extension) == 0);
-            assert(strcmp(".streamfs", no_extension) != 0);
-            if(p_open(is_extension ? a_name + m_extension.data() : a_name) != 0){
-                m_mode = Mode::error;
-                m_state = State::cannot_open_file;
-                return;
-            }
-        }
+        explicit File(const std::string& a_name) : File(a_name, Style::error){}
 
         ~File(){ std::fclose(m_file); }
 
@@ -117,11 +99,49 @@ namespace streamfs
         template<std::enable_if_t<t_Mode == Mode::free_stream || t_Mode == Mode::write, bool> = true>
         m_size_type write(m_size_type a_size, m_buffer_pointer a_p) //returns how many bytes has writen
         {
+            switch (m_style) {
+                classic:
+                    fwrite(&a_size, sizeof(a_size), 1, m_file);
+                    break;
+                table:
+
+                    break;
+                encrypted:
+                    break;
+                table_encrypted:
+                    break;
+                compressed:
+                    break;
+                table_compressed:
+                    break;
+                compressed_encrypted:
+                    break;
+                table_compressed_encrypted:
+                    break;
+            }
+            fwrite(a_p, a_size, 1, m_file);
+
             if(!m_file || !a_p || a_size == 0)
                 return 0;
             auto buffer = std::make_unique<std::remove_reference_t<decltype(*a_p)>[]>(a_size);
             fwrite(a_p, a_size, 1, m_file);
         }
+
+        template<std::enable_if_t<t_Mode == Mode::free_stream || t_Mode == Mode::write, bool> = true>
+        m_size_type write_stream(m_size_type a_size, m_buffer_pointer a_p) //returns how many bytes has writen
+        {
+            if(m_style)
+                fwrite(a_p, a_size, 1, m_file);
+
+            if(!m_file || !a_p || a_size == 0)
+                return 0;
+            auto buffer = std::make_unique<std::remove_reference_t<decltype(*a_p)>[]>(a_size);
+            fwrite(a_p, a_size, 1, m_file);
+        }
+
+        template<std::enable_if_t<t_Mode == Mode::free_stream || t_Mode == Mode::write, bool> = true>
+        m_size_type write_end(m_size_type a_size, m_buffer_pointer a_p) //returns how many bytes has writen
+        {}
 
         template<std::enable_if_t<t_Mode == Mode::free_stream || t_Mode == Mode::read, bool> = true>
         m_size_type get_read_size(m_buffer_pointer a_p)
@@ -229,15 +249,14 @@ namespace streamfs
             return std::forward<Container>(a_container);
         }
 
-        std::string getErrors()
+        std::string get_errors()
         {
-            if(m_mode != Mode::error)
-                return "No errors occurred";
-
             std::string error_message{"\n"};
 
             if(m_state == State::cannot_open_file)
                 error_message += "Cannot open file!\n";
+            else if(m_state == State::freestream_without_style)
+                error_message += "\n";
 
             if(m_style == encrypted
             || m_style == compressed_encrypted
@@ -284,8 +303,7 @@ namespace streamfs
             return 0;
         }
 
-        //template<bool OnlyExist = false>
-        m_return_code_type p_open(const std::string& a_name)
+        m_return_code_type m_open(const std::string& a_name)
         {
 
             auto is_exist = [&]() -> bool {
@@ -294,34 +312,41 @@ namespace streamfs
                 if(exist) fclose(file);
                 return exist;
             };
-            //if(OnlyExist && !is_exist())
-              //  return 2;
-            switch (m_mode) {
+
+            switch (t_Mode) {
                 case Mode::write :
                     m_file = std::fopen(a_name.c_str(), "wb+");
-                    write(std::size(m_info) * sizeof(*m_info), m_info);
+                    //!!! write(std::size(m_info) * sizeof(*m_info), m_info);
                     break;
                 case Mode::read :
                     if(is_exist()){
                         m_file = std::fopen(a_name.c_str(), "rb+");
-                        read(std::size(m_info) * sizeof(*m_info), m_info);
+                        //!!! read(std::size(m_info) * sizeof(*m_info), m_info);
                         m_check();
                         //if(p_check(m_file)) { m_mode = Mode::error; }
-                    }else{ m_mode = Mode::error; }
+                    }else{
+                        m_state.insert(State::cannot_open_file);
+                        return 1;
+                    }
                     break;
                 case Mode::free_stream :
-                    m_file = std::fopen(a_name.c_str(), "rb+");
                     if(is_exist()){
-                        read(std::size(m_info) * sizeof(*m_info), m_info);
+                        m_file = std::fopen(a_name.c_str(), "rb+");
+                        //!!! read(std::size(m_info) * sizeof(*m_info), m_info);
                         m_check();
+                    }else if(m_style != Style::error){
+                        m_file = std::fopen(a_name.c_str(), "wb+");
+                        //!!! write(std::size(m_info) * sizeof(*m_info), m_info);
                     }else{
-                        write(std::size(m_info) * sizeof(*m_info), m_info);
+                        m_state.insert(State::freestream_without_style);
+                        return 1;
                     }
                     break;
                 default:
                     break;
             }
-            if ( m_file ) return 0;
+            if(m_file) return 0;
+            m_state.insert(State::cannot_open_file);
             return 1;
         }
     };
