@@ -370,6 +370,7 @@ namespace streamfs {
             if(*temp){return 0;}
             else{return 1;}
         }*/
+
         m_return_code_type m_check() //check modes and structures
         {
             m_info_buffer_type info;
