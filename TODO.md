@@ -1,0 +1,5 @@
+-realize all modes
+-lazy write
+-async write
+-check max size
+-handle files more than 2 gb

@@ -52,19 +52,20 @@ namespace streamfs {
     template<Mode t_Mode = Mode::free_stream, typename H = uint8_t>
     class File {
         enum struct State {
-            error, ok, process, none,
+            error, ok, process, undefined,
             encrypt_failed, compress_failed,
             decrypt_failed, decompress_failed,
             cannot_open_file, freestream_without_style, wrong_constructor,
-            write_error, read_error, size
+            write_error, read_error, read_stopped, read_no_size, read_size_error,
+            data_state_error, end_of_file, size
         };
 
         constexpr static std::array<std::pair<State, std::string_view>, static_cast<std::size_t>(State::size)>
                 error_messages{{
-                                       {State::error, "Unknown error\n"},
+                                       {State::error, "Error\n"},
                                        {State::ok, "No errors occurred\n"},
                                        {State::process, "File in superposition, need to finish last procedure\n"},
-                                       {State::none, "Undefined"},
+                                       {State::undefined, "Undefined error"},
                                        {State::encrypt_failed, "Encrypt failed\n"},
                                        {State::compress_failed, "Compress failed\n"},
                                        {State::decrypt_failed, "Decrypt failed\n"},
@@ -72,12 +73,17 @@ namespace streamfs {
                                        {State::cannot_open_file, "Cannot open file!\n"},
                                        {State::freestream_without_style, "File and style are empty, can't create\n"},
                                        {State::wrong_constructor, "Wrong callbacks or style\n"},
-                                       {State::write_error, "Can't write, check buffer and permissions\n"},
-                                       {State::read_error, "Can't read, check buffer and permissions\n"}
+                                       {State::write_error, "Write error, check buffer and permissions\n"},
+                                       {State::read_error, "Read error, check buffer and permissions\n"},
+                                       {State::read_stopped, "Read operation stopped, written new data\n"},
+                                       {State::read_no_size, "You must request size at first, to avoid segfault\n"},
+                                       {State::read_size_error, "Buffer size is smaller than needed\n"},
+                                       {State::data_state_error, "Wrong state of data, data corrupted\n"},
+                                       {State::end_of_file, "End of file\n"}
                                }};
 
         enum struct DataState {
-            error, ok, deleted, in_process
+            error, ok, deleted, in_process, write_did, read_did
         } dataState = DataState::in_process;
 
         typedef std::int8_t m_return_code_type;
@@ -166,7 +172,7 @@ namespace streamfs {
         }
 
         /* classic
-         * size, 1 byte flags,
+         * size
          *
          *
          */
@@ -179,20 +185,27 @@ namespace streamfs {
                 return 0;
             }
 
+            static_assert(sizeof(m_size_type) == 8, "SIZE OF SIZE VARIABLE ERROR");
+            static_assert(sizeof(DataState) == 4, "SIZE OF DATA STATE VARIABLE ERROR");
+
+            auto dataStatePos = std::ftell(m_file);
+            dataStatePos = -1;
+
+            if(dataState != DataState::write_did){
+                m_state.emplace_back(State::read_stopped);
+                std::fseek(m_file, 0, SEEK_END);
+                std::cout<<"RESET";
+            }
+
+            dataState = DataState::in_process;
+            m_size_type writen_size = 0;
             switch (m_style) {
-                case classic: {
-                    dataState = DataState::in_process;
-                    std::fwrite(&a_size, sizeof(a_size), 1, m_file);
-                    auto dataStatePos = std::ftell(m_file);
-                    std::fwrite(&dataState, sizeof(dataState), 1, m_file);
+                case classic:
+                    writen_size += std::fwrite(&a_size, 1, sizeof(a_size), m_file);
+                    dataStatePos = std::ftell(m_file);
 
-                    std::fwrite(a_p, a_size, 1, m_file);
-
-                    std::fseek(m_file, dataStatePos, SEEK_SET);
-                    dataState = DataState::ok;
-                    std::fwrite(&dataState, sizeof(dataState), 1, m_file);
-                    std::fseek(m_file, 0, SEEK_END);
-                }
+                    writen_size += std::fwrite(&dataState, 1, sizeof(dataState), m_file);
+                    writen_size += std::fwrite(a_p, 1, a_size, m_file);
                     break;
                 case table:
                     break;
@@ -211,20 +224,42 @@ namespace streamfs {
             }
             //fwrite(a_p, a_size, 1, m_file);
 
-            auto buffer = std::make_unique<std::remove_reference_t<decltype(*a_p)>[]>(a_size);
-            fwrite(a_p, a_size, 1, m_file);
+            if(writen_size != sizeof(a_size) + sizeof(dataState) + a_size){
+                dataState = DataState::error;
+                m_state.emplace_back(State::write_error);
+                m_state[0] = State::error;
+
+                return writen_size;
+            }
+
+            std::fseek(m_file, dataStatePos, SEEK_SET);
+            dataState = DataState::ok;
+            writen_size = std::fwrite(&dataState, 1, sizeof(dataState), m_file);
+            std::fseek(m_file, 0, SEEK_END);
+
+            if(writen_size != sizeof(dataState)){
+                dataState = DataState::error;
+                m_state.emplace_back(State::write_error);
+                m_state[0] = State::error;
+                return writen_size;
+            }
+            std::cout<< "ALL OK;"<<std::endl;
+            dataState = DataState::write_did;
+            return writen_size;
+
+            //auto buffer = std::make_unique<std::remove_reference_t<decltype(*a_p)>[]>(a_size);
         }
 
         template<std::enable_if_t<t_Mode == Mode::free_stream || t_Mode == Mode::write, bool> = true>
         m_size_type write_stream(m_size_type a_size, m_buffer_pointer a_p) //returns how many bytes has writen
         {
             if (m_style)
-                fwrite(a_p, a_size, 1, m_file);
+                fwrite(a_p, 1, a_size, m_file);
 
             if (!m_file || !a_p || a_size == 0)
                 return 0;
             auto buffer = std::make_unique<std::remove_reference_t<decltype(*a_p)>[]>(a_size);
-            fwrite(a_p, a_size, 1, m_file);
+            fwrite(a_p, 1, a_size, m_file);
         }
 
         template<std::enable_if_t<t_Mode == Mode::free_stream || t_Mode == Mode::write, bool> = true>
@@ -232,16 +267,54 @@ namespace streamfs {
         {}
 
         template<std::enable_if_t<t_Mode == Mode::free_stream || t_Mode == Mode::read, bool> = true>
-        m_size_type get_read_size(m_buffer_pointer a_p) {
+        m_size_type get_read_size() {
+            if(dataState == DataState::write_did)
+                std::fseek(m_file, 0, SEEK_SET);
 
+            m_size_type a_size, read_size;
+            read_size = fread(&a_size, 1, sizeof(a_size), m_file);
+            std::cout << "Read size:: " << a_size << std::endl;
+            if(read_size != sizeof(a_size)){
+                m_state.emplace_back(State::end_of_file);
+                m_state[0] = State::error;
+                return 0;
+            }
+
+            std::fseek(m_file, 0l-static_cast<std::int64_t>(sizeof(m_size_type) ), SEEK_CUR);
+            dataState = DataState::read_did;
+            return a_size;
+            //add checks here for data state
         }
 
 
         template<std::enable_if_t<t_Mode == Mode::free_stream || t_Mode == Mode::read, bool> = true>
         m_size_type read(m_buffer_pointer a_p) //returns how many bytes has read
         {
+            if(dataState == DataState::write_did){
+                m_state.emplace_back(State::read_no_size);
+                return 0;
+            }
+            m_size_type a_size, read_size = 0;
+
             switch (m_style) {
                 case classic:
+
+                    read_size = fread(&a_size, 1, sizeof(a_size), m_file);
+                    if(a_size > sizeof(a_p) || read_size != sizeof(m_size_type)) {
+                        m_state.emplace_back(State::read_size_error);
+                        m_state[0] = State::error;
+                        return 0;
+                    }
+
+                    read_size = fread(&dataState, 1, sizeof(DataState), m_file);
+                    if(dataState != DataState::ok || read_size != sizeof(DataState)){
+                        m_state.emplace_back(State::data_state_error);
+                        m_state.emplace_back(State::end_of_file);
+                        m_state[0] = State::error;
+                        return 0;
+                    }
+
+                    read_size = fread(a_p, 1, a_size, m_file);
                     break;
                 case table:
                     break;
@@ -260,12 +333,13 @@ namespace streamfs {
             }
 
             //if(!m_file || !a_p || a_size == 0)
-            return 0;
-            //fread(a_p, a_size, 1, m_file);
+            dataState = DataState::read_did;
+            return read_size;
         }
 
         template<std::enable_if_t<t_Mode == Mode::free_stream || t_Mode == Mode::read, bool> = true>
-        std::unique_ptr<m_data_type *> get_read_size(m_buffer_pointer a_p) {
+        std::unique_ptr<m_data_type *> undefided_get_release(m_buffer_pointer a_p) {
+            assert(false);
 
         }
 
@@ -293,12 +367,13 @@ namespace streamfs {
 
             if (!m_file || !a_p || a_size == 0)
                 return 0;
-            fread(a_p, a_size, 1, m_file);
+            fread(a_p, 1, a_size, m_file);
         }
 
         template<typename Container, std::enable_if_t<!sfs_prvt::Has_dataMethod<Container>::value, bool> = true>
         Container &operator<<(Container &&a_container) //have no data method
         {
+            std::cout<< "no container with data method" << std::endl;
             auto begin_it = std::begin(a_container), end_it = std::end(a_container);
             for (; begin_it != end_it; ++begin_it) {
 
@@ -309,6 +384,8 @@ namespace streamfs {
         template<typename Container, std::enable_if_t<!sfs_prvt::Has_dataMethod<Container>::value, bool> = true>
         Container &operator>>(Container &&a_container) //have no data method
         {
+            std::cout<< "no container with data method" << std::endl;
+
             auto begin_it = std::begin(a_container), end_it = std::end(a_container);
             for (; begin_it != end_it; ++begin_it) {
 
@@ -318,6 +395,8 @@ namespace streamfs {
 
         template<typename Container, std::enable_if_t<sfs_prvt::Has_dataMethod<Container>::value, bool> = true>
         Container &operator<<(Container &&a_container) {
+            std::cout<< "container with data method" << std::endl;
+
             auto begin_it = std::begin(a_container), end_it = std::end(a_container);
             for (; begin_it != end_it; ++begin_it) {
 
@@ -327,6 +406,8 @@ namespace streamfs {
 
         template<typename Container, std::enable_if_t<sfs_prvt::Has_dataMethod<Container>::value, bool> = true>
         Container &operator>>(Container &&a_container) {
+            std::cout<< "container with data method" << std::endl;
+
             auto begin_it = std::begin(a_container), end_it = std::end(a_container);
             for (; begin_it != end_it; ++begin_it) {
 
@@ -374,7 +455,7 @@ namespace streamfs {
         m_return_code_type m_check() //check modes and structures
         {
             m_info_buffer_type info;
-            fread(m_info, sizeof(*m_info), std::size(m_info), m_file);
+            fread(m_info, 1, sizeof(*m_info) * std::size(m_info), m_file);
             switch (m_style) {
                 case streamfs::classic:
                     break;
